@@ -1,0 +1,52 @@
+{
+  "country": "Canada",
+  "country_code": "CA",
+  "ship_date": "2026-04-24",
+  "totals": {
+    "packages": 5,
+    "gross_weight_kg": 9,
+    "net_weight_kg": 8
+  },
+  "packing": {
+    "carton_policy": "first-line-carrier"
+  },
+  "items": [
+    {
+      "line": 1,
+      "hs_code": "3926909090",
+      "declaration_name": "sample plastic part",
+      "declaration_elements": "mock elements",
+      "carton_group_id": "mixed-5-a",
+      "carton_role": "group-carton-carrier",
+      "physical_cartons": 5,
+      "pcs_per_carton": 32,
+      "quantity_delta": 0,
+      "cartons": 5,
+      "mixed_weight_source": "simulated allocation from warehouse gross weight and unit product weights",
+      "gross_weight_kg": 5,
+      "net_weight_kg": 4.5,
+      "quantity": 160,
+      "unit": "个",
+      "unit_price_v4": 1.23
+    },
+    {
+      "line": 2,
+      "hs_code": "9603909090",
+      "declaration_name": "sample mop head",
+      "declaration_elements": "mock elements",
+      "carton_group_id": "mixed-5-a",
+      "carton_role": "co-packed-line",
+      "physical_cartons": 5,
+      "pcs_per_carton": 7,
+      "quantity_delta": 1,
+      "cartons": 0,
+      "mixed_weight_source": "simulated allocation from warehouse gross weight and unit product weights",
+      "gross_weight_kg": 4,
+      "net_weight_kg": 3.5,
+      "quantity": 36,
+      "unit": "个",
+      "unit_price_v4": 2.34,
+      "note": "5 cartons standard 7 pcs/ctn, actual 36, +1."
+    }
+  ]
+}

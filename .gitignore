@@ -1,0 +1,9 @@
+node_modules/
+outputs/
+.analysis/
+**/.analysis/
+**/__pycache__/
+*.pyc
+*.tmp
+~$*.xlsx
+

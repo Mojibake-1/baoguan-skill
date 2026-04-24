@@ -1,0 +1,92 @@
+﻿{
+  "declaration": {
+    "pre_entry_no": "",
+    "customs_no": "",
+    "customs_office": "上海海关",
+    "contract_no": "HT20260424001",
+    "declaration_date": "2026-04-24",
+    "trade_mode": "一般贸易",
+    "tax_mode": "一般征税",
+    "license_no": ""
+  },
+  "domestic_consignor": {
+    "name": "上海示例进出口有限公司",
+    "credit_code": "91310000XXXXXXXXXX"
+  },
+  "overseas_consignee": {
+    "name": "Example Trading LLC"
+  },
+  "producer_seller": {
+    "name": "上海示例进出口有限公司"
+  },
+  "declaration_agent": {
+    "name": "上海示例报关有限公司",
+    "credit_code": "91310000YYYYYYYYYY"
+  },
+  "shipment": {
+    "transport_mode": "海运",
+    "vessel_voyage": "COSCO EXAMPLE / 012E",
+    "bill_no": "OOLU1234567890",
+    "import_export_date": "2026-04-30",
+    "destination_port": "LOS ANGELES",
+    "source_place": "上海",
+    "marks_and_notes": "N/M"
+  },
+  "trade": {
+    "country": "美国",
+    "destination_country": "美国",
+    "incoterm": "FOB",
+    "freight": "",
+    "insurance": "",
+    "other_charges": ""
+  },
+  "totals": {
+    "packages": 120,
+    "package_type": "纸箱",
+    "gross_weight_kg": 1520.5,
+    "net_weight_kg": 1400
+  },
+  "docs": {
+    "attached": "合同、发票、装箱单"
+  },
+  "items": [
+    {
+      "line_no": 1,
+      "record_item_no": "",
+      "hs_code": "9403609990",
+      "description_cn": "木制展示架",
+      "description_en": "Wooden display stand",
+      "specification": "1200*450*1800mm",
+      "quantity": 500,
+      "unit": "个",
+      "second_quantity": "",
+      "second_unit": "",
+      "unit_price": 25,
+      "total_price": 12500,
+      "currency": "USD",
+      "origin_country": "中国",
+      "destination_country": "美国",
+      "source_place": "上海",
+      "tax_exemption": "照章征税"
+    },
+    {
+      "line_no": 2,
+      "record_item_no": "",
+      "hs_code": "3926909090",
+      "description_cn": "塑料配件",
+      "description_en": "Plastic fittings",
+      "specification": "For display stand",
+      "quantity": 1000,
+      "unit": "套",
+      "second_quantity": "",
+      "second_unit": "",
+      "unit_price": 1.8,
+      "total_price": 1800,
+      "currency": "USD",
+      "origin_country": "中国",
+      "destination_country": "美国",
+      "source_place": "上海",
+      "tax_exemption": "照章征税"
+    }
+  ]
+}

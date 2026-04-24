@@ -1,0 +1,56 @@
+{
+  "groups": [
+    {
+      "carton_group_id": "mock-qq-mixed-001",
+      "warehouse_gross_weight_kg": 19.8,
+      "carton_count": 1,
+      "quantity_basis": "per_carton",
+      "items": [
+        {
+          "name": "sample removable pad set",
+          "sku": "MOCK-M6",
+          "unit_weight_kg": 0.35,
+          "quantity": 17
+        },
+        {
+          "name": "sample dust bag 10pk",
+          "sku": "MOCK-DUST-10",
+          "unit_weight_kg": 0.01,
+          "quantity": 20
+        },
+        {
+          "name": "sample dust bag 20pk",
+          "sku": "MOCK-DUST-20",
+          "unit_weight_kg": 0.076,
+          "quantity": 16
+        },
+        {
+          "name": "sample mop kit",
+          "sku": "MOCK-MOP-KIT",
+          "unit_weight_kg": 0.75,
+          "quantity": 10
+        },
+        {
+          "name": "sample red brush",
+          "sku": "MOCK-BRUSH",
+          "unit_weight_kg": 0.1,
+          "quantity": 26
+        }
+      ]
+    },
+    {
+      "carton_group_id": "mock-repeated-5ctn-standard",
+      "warehouse_gross_weight_kg": 8.5,
+      "carton_count": 5,
+      "quantity_basis": "per_carton",
+      "items": [
+        {
+          "name": "sample small blue mop head",
+          "sku": "MOCK-MPB04",
+          "unit_weight_kg": 0.12,
+          "quantity": 7
+        }
+      ]
+    }
+  ]
+}
