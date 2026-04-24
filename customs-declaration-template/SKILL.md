@@ -14,6 +14,7 @@ Use this skill for the fixed company workflow: copy the long Excel template, fil
 3. For any shared/mixed carton group, collect either final allocated gross/net weights with a source note, or the allocation inputs: group warehouse gross weight, each SKU's unit product weight, and whether quantities are per carton or total.
 4. Build a declaration JSON and run `scripts/validate_declaration_data.py` before Excel generation whenever there is 拼箱/混箱/合并箱数/差异箱. Do not generate the workbook if validation has errors.
 5. Only after validation passes, create the final workbook with Excel COM.
+6. Return the final workbook together with a match-audit table comparing the current shipment rows to the source `报关名` rows.
 
 ## Non-Negotiable Rules
 
@@ -125,6 +126,16 @@ On a new machine, confirm these before the first production run:
 4. Use SKU/model only as supporting evidence or tie-breaker after name and pack/quantity plausibility. Do not use SKU as the primary key.
 5. If multiple plausible candidates exist, show candidate rows with `产品内容`, `报关商品名称`, `报关规格型号`, `海关编码`, `申报单价V4`, `pc/ctn`, `毛重`, `净重`, and ask the user to choose.
 6. If source `pc/ctn` conflicts with the current task, first determine whether it is a true mismatch or a declared 差异箱. For 差异箱, keep the stock-plan `pc/ctn` as the standard, write the current task's actual total quantity, and record `quantity_delta = actual_total - standard_pc_per_ctn * physical_cartons`. If operations/user confirms a true mismatch, write the current task's total quantity and keep source row data for HS/name/elements/weights/price.
+
+For every accepted match, keep an audit record for the final user-facing match table:
+
+- current shipment product name
+- current SKU/model
+- current `PCS/CTN`, physical cartons, declaration cartons, and total quantity
+- matched source row number
+- source `C 产品内容`, `D 报关规格型号`, `E 对应平台 SKU`, and `H pc/ctn`
+- matched HS code, declaration name, and `申报单价V4`
+- match status/notes such as exact match, SKU-assisted match, name differs, pc/ctn differs, shared carton group, or difference carton
 
 When no product row matches, send a Feishu notification before stopping. This step is mandatory even if the user did not ask for notification:
 
@@ -325,6 +336,9 @@ Before returning the workbook:
 - Confirm destination country, declaration date, contract date, contract number, unit price column, package total, quantity total, gross weight, and net weight.
 - For 拼箱/混箱, confirm package total uses unique physical cartons and is not multiplied by product-row count.
 - For 差异箱, confirm every non-zero `quantity_delta` is visible in the review notes or report and was not treated as a matching failure.
+- Provide a match-audit table for user review. Keep it compact in the final response for normal shipments; for larger shipments, also save a sidecar CSV next to the final workbook.
+- The match-audit table must compare current shipment vs source `报关名` at minimum: `本次产品名`, `本次SKU/型号`, `本次PCS/CTN`, `本次箱数/总数量`, `源表行`, `源表产品内容`, `源表SKU/规格型号`, `源表pc/ctn`, `HS编码`, `申报品名`, `申报单价V4`, `匹配备注`.
+- If any row has a name mismatch, SKU/model correction, pc/ctn mismatch, shared carton, or difference carton, make that visible in `匹配备注` instead of only mentioning it in prose.
 - If a visual/reference workbook is provided, compare sheet structure, formulas, row deletions, and formatting coverage against it.
 
 ## Legacy Generic Script
