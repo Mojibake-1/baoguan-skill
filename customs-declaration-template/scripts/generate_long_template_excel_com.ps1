@@ -223,13 +223,24 @@ $country = Get-FirstNested $data @("country", "trade.destination_country", "trad
 if (-not $country) {
     throw "Destination country is required."
 }
-$shipDateRaw = Get-FirstNested $data @("ship_date", "shipment.actual_ship_date", "shipment.import_export_date", "declaration.declaration_date") $null
-if (-not $shipDateRaw) {
-    throw "Actual shipment/declaration date is required."
+$declarationDateRaw = Get-FirstNested $data @(
+    "declaration_date",
+    "declaration.declaration_date",
+    "declaration.document_date",
+    "document_date",
+    "declaration.created_date",
+    "created_date",
+    "ship_date",
+    "shipment.actual_ship_date",
+    "shipment.import_export_date"
+) $null
+if (-not $declarationDateRaw) {
+    $declarationDate = (Get-Date).Date
+} else {
+    $declarationDate = To-Date $declarationDateRaw
 }
 
-$shipDate = To-Date $shipDateRaw
-$contractDate = Get-ContractDate $shipDate
+$contractDate = Get-ContractDate $declarationDate
 $countryCode = Get-CountryCode ([string]$country) $data
 $contractNo = "HS-{0}-{1}" -f $countryCode, $contractDate.ToString("yyyyMMdd")
 $defaultUnit = U @(0x4E2A)
@@ -255,7 +266,7 @@ try {
     $contractSheet = $workbook.Worksheets.Item(5)
     $elementsSheet = $workbook.Worksheets.Item(7)
 
-    Set-MergedValue $inputSheet "G3" $shipDate
+    Set-MergedValue $inputSheet "G3" $declarationDate
     Set-MergedValue $inputSheet "E11" ([string]$country)
     Set-MergedValue $inputSheet "K10" $contractDate
     Set-MergedValue $inputSheet "K9" $contractNo
@@ -264,7 +275,7 @@ try {
         $item = $items[$index]
         $row = 21 + ($index * 2)
         $lineNo = Get-Prop $item @("line_no", "line") ($index + 1)
-        $unit = Get-Prop $item @("unit") $defaultUnit
+        $unit = $defaultUnit
         $unitPrice = Get-Prop $item @("unit_price", "unit_price_v4", "price_v4", "price") $null
         if ($null -eq $unitPrice) {
             throw "Missing unit price for item line $lineNo."

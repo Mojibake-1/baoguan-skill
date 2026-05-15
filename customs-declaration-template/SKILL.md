@@ -7,14 +7,21 @@ description: Generate Chinese customs declaration workbooks from the company lon
 
 Use this skill for the fixed company workflow: copy the long Excel template, fill only `报关资料录入`, let later sheets calculate from formulas, then delete extra item rows. This is not a generic placeholder-template workflow.
 
+## Multi-Declaration Subagent Dispatch
+
+When a source workbook contains multiple declaration tickets/workbooks and subagents are available, split the source into ticket-scoped inputs first, then dispatch one worker subagent per declaration ticket. Each worker owns exactly one declaration workbook and must only write its own ticket-scoped `.analysis/.../ticket-*` files and output workbook; do not assign one worker to generate multiple tickets.
+
+Use the newest available model for these workers with `reasoning_effort=xhigh` (currently prefer GPT-5.5 when available). The main agent remains responsible for shared source copying, ticket splitting, supplement files, final cross-ticket reconciliation, edits to renamed final outputs, and final Excel COM validation. Each worker must report changed paths, carton/quantity totals, validation output, and blockers. If product matching, brand, store ownership, carton packing, or red-marked difference boxes are ambiguous, the worker must stop and report the blocker instead of inventing data.
+
 ## Required Run Order
 
-1. Collect the current shipment list, actual shipment date, destination country/station, and any packing-specific inputs.
+1. Collect the current shipment list, declaration-document date (the date the customs declaration workbook is being made; default to today's local date if the user does not specify another date), destination country/station, and any packing-specific inputs.
 2. Normalize packing before product matching conclusions: blank carton cells, merged carton cells, 拼箱/混箱, and 差异箱 must be resolved first.
 3. For any shared/mixed carton group, collect either final allocated gross/net weights with a source note, or the allocation inputs: group warehouse gross weight, each SKU's unit product weight, and whether quantities are per carton or total.
-4. Build a declaration JSON and run `scripts/validate_declaration_data.py` before Excel generation whenever there is 拼箱/混箱/合并箱数/差异箱. Do not generate the workbook if validation has errors.
-5. Only after validation passes, create the final workbook with Excel COM.
-6. Return the final workbook together with a match-audit table comparing the current shipment rows to the source `报关名` rows.
+4. Match products against `报关名`. If a product cannot be matched or has multiple plausible candidates, stop and ask the user with the candidate rows.
+5. Build a declaration JSON and run `scripts/validate_declaration_data.py` before Excel generation whenever there is 拼箱/混箱/合并箱数/差异箱. Do not generate the workbook if validation has errors.
+6. Only after validation passes, create the final workbook with Excel COM.
+7. Return the final workbook path(s) and concise validation notes. Do not include a full match-audit table by default.
 
 ## Non-Negotiable Rules
 
@@ -27,6 +34,8 @@ Use this skill for the fixed company workflow: copy the long Excel template, fil
 - Do not rewrite downstream sheets. After `报关资料录入` is correct, downstream sheets should only have extra rows deleted. The only allowed downstream formula edit is the known `#REF!` repair listed below.
 - Do not invent customs data. If `报关名` has no matching product row, stop and ask the user/operations to add the row.
 - If `报关名` has no matching product row, run `scripts/notify_missing_product_lark.ps1` once to notify operations contact JOJO before stopping.
+- Do not send a full current-shipment-vs-`报关名` match table in every final response. Only show matching details when something is unmatched, ambiguous, or needs the user's choice.
+- `pc/ctn` is not completely fixed. A source `pc/ctn` difference by itself is not an unmatched-product problem and should not trigger a user-facing warning unless it affects carton math, mixed-carton allocation, or a real quantity discrepancy that needs confirmation.
 
 - For shared/mixed carton rows, never promise final workbook generation after only confirming destination/date/carton grouping. Also require mixed-carton weight allocation inputs or final allocated gross/net weights with a source note.
 - When asking for mixed-carton weight inputs, explicitly request all required fields: group warehouse gross weight, each SKU's unit product weight, and whether quantities are per carton or total. Do not say "or use the existing rule" unless those exact inputs are already available in the current source.
@@ -54,7 +63,7 @@ Use this skill for the fixed company workflow: copy the long Excel template, fil
 If the user says only "帮我做报关单" or similar, assume this skill should run. The user is expected to provide the current shipment list in the message or as a spreadsheet/screenshot. The minimum per-task inputs are:
 
 - current product list / 本次要做的货物清单
-- actual shipment date / 本次实际发货日期
+- declaration-document date / 报关单资料制作日期（默认今天；不要默认使用实际发货日期）
 - destination country or station / 目的国或站点
 - PCS/CTN
 - cartons / 箱数
@@ -125,17 +134,20 @@ On a new machine, confirm these before the first production run:
 3. If full name fails, extract core terms. Example: `2个装三角拖UK` -> `2个装三角拖`, which can match `2个装三角拖把头`.
 4. Use SKU/model only as supporting evidence or tie-breaker after name and pack/quantity plausibility. Do not use SKU as the primary key.
 5. If multiple plausible candidates exist, show candidate rows with `产品内容`, `报关商品名称`, `报关规格型号`, `海关编码`, `申报单价V4`, `pc/ctn`, `毛重`, `净重`, and ask the user to choose.
-6. If source `pc/ctn` conflicts with the current task, first determine whether it is a true mismatch or a declared 差异箱. For 差异箱, keep the stock-plan `pc/ctn` as the standard, write the current task's actual total quantity, and record `quantity_delta = actual_total - standard_pc_per_ctn * physical_cartons`. If operations/user confirms a true mismatch, write the current task's total quantity and keep source row data for HS/name/elements/weights/price.
+6. If source `pc/ctn` conflicts with the current task, do not treat that alone as a failed match. Use the current task's actual total quantity and carton data. Only ask the user when the product identity is unclear, the quantity discrepancy is not explained by the shipment source, or the mixed-carton weight allocation depends on the conflict.
 
-For every accepted match, keep an audit record for the final user-facing match table:
+## Unmatched or Ambiguous Match Output
 
-- current shipment product name
-- current SKU/model
-- current `PCS/CTN`, physical cartons, declaration cartons, and total quantity
-- matched source row number
-- source `C 产品内容`, `D 报关规格型号`, `E 对应平台 SKU`, and `H pc/ctn`
-- matched HS code, declaration name, and `申报单价V4`
-- match status/notes such as exact match, SKU-assisted match, name differs, pc/ctn differs, shared carton group, or difference carton
+Do not output a full matching table after every successful task.
+
+Only show matching details to the user when:
+
+- no `报关名` row can be matched for a current product;
+- multiple plausible candidates exist and the user must choose;
+- product name/SKU/model evidence conflicts enough to affect the HS code, declaration name, declaration elements, or unit price;
+- a quantity/difference-carton issue exceeds the confirmation threshold and is not already clearly marked by the user's source.
+
+When asking the user, include the relevant candidate rows with `产品内容`, `报关商品名称`, `报关规格型号`, `海关编码`, `申报单价V4`, `pc/ctn`, `毛重`, and `净重`.
 
 When no product row matches, send a Feishu notification before stopping. This step is mandatory even if the user did not ask for notification:
 
@@ -171,9 +183,9 @@ For 拼箱/混箱/merged carton cells/差异箱 tasks, normalize the shipment be
 
 Fill these cells on `报关资料录入`:
 
-- `G3`: 申报日期 = actual shipment date / 实际发货时间.
+- `G3`: 申报日期 = declaration-document date / 做报关单资料当天日期. This is not the actual shipment date unless the user explicitly says the declaration-document date should be the shipment date.
 - `E11`: 抵运国 = destination country for this shipment.
-- `K10`: 合同日期 = actual shipment date minus 22 days; if that result is Saturday or Sunday, move back to the previous Friday. Write a fixed date value, not the original formula.
+- `K10`: 合同日期 = declaration-document date minus 22 days; if that result is Saturday or Sunday, move back to the previous Friday. Write a fixed date value, not the original formula.
 - `K9`: 合同协议号 = `HS-{country_code}-{yyyymmdd}` using the adjusted contract date.
 - When writing dates with Excel COM, preserve the target cell's existing number format. Do not let Excel auto-change `G3` from the template's date format.
 
@@ -199,7 +211,7 @@ For item `i`, top row = `21 + (i - 1) * 2`:
 - `H{row}`: 毛重 KG = cartons * `报关名!I`, unless the user provides an approved override
 - `I{row}`: 净重 KG = cartons * `报关名!J`, unless the user provides an approved override
 - `J{row}`: 数量 = current task actual total quantity. If this differs from `pc/ctn * physical_cartons`, record the 差异箱 reason and use the actual total after confirmation.
-- `K{row}`: 单位, usually `个`
+- `K{row}`: 单位 = `个`. Always write `个` for every declaration item; do not copy `报关名` or JSON item-level units such as `套`.
 - `L{row}`: 单价 from `报关名!G 申报单价V4`
 
 ## Row Deletion Rules
@@ -232,12 +244,27 @@ Do not otherwise rewrite downstream formulas.
 Final workbook name:
 
 ```text
-{目的国中文名}{件数}件报关单资料{YYMMDD}.xlsx
+{物流商简称}{目的国代码小写}{件数}件报关单资料{YYMMDD}.xlsx
 ```
 
-`件数` means the package/carton total, i.e. the sum of `报关资料录入` column `G`, not the number of product rows. Example: 9 product rows with cartons `10+1+1+4+2+1+6+4+18` is `47件`, so the file name should use `加拿大47件报关单资料260423.xlsx`.
+Use the current shipment source column `物流商及渠道` for the filename prefix whenever it is present, so operations do not need to rename files later. Normalize it to the recognizable logistics/vendor prefix:
 
-Use actual shipment date for `{YYMMDD}` unless the user says otherwise. If the target file exists, create a `-2`, `-3`, etc. variant instead of overwriting.
+- `宝通达纽约卡派` or other `宝通达...` -> `宝通达`
+- `海光普船海卡` or other `海光...` -> `海光`
+- otherwise use the leading logistics/vendor name from the cell, removing route/channel suffixes only when obvious.
+
+If multiple logistics channels are combined into one declaration workbook, ask the user which prefix to use unless all channels share the same vendor prefix.
+
+Always append the destination country code in lowercase after the logistics prefix. Known examples:
+
+- `宝通达纽约卡派` + 美国 + 26件 + 2026-04-30 -> `宝通达us26件报关单资料260430.xlsx`
+- `海光普船海卡` + 美国 + 40件 + 2026-04-30 -> `海光us40件报关单资料260430.xlsx`
+
+Known lowercase country codes: 美国 `us`, 英国 `uk`, 加拿大 `ca`. Ask before inventing a new country code.
+
+`件数` means the package/carton total, i.e. the sum of `报关资料录入` column `G`, not the number of product rows. Example: 9 product rows with cartons `10+1+1+4+2+1+6+4+18` is `47件`, so a Canada file with no logistics channel could be `加拿大47件报关单资料260423.xlsx`.
+
+Use declaration-document date for `{YYMMDD}` unless the user says otherwise. Do not use actual shipment date for the filename by default. If the target file exists, create a `-2`, `-3`, etc. variant instead of overwriting.
 
 Use `scripts/name_declaration_output.py` for naming when convenient.
 
@@ -257,7 +284,7 @@ The JSON may use either normalized fields or the report shape produced during ma
 ```json
 {
   "country": "加拿大",
-  "ship_date": "2026-04-23",
+  "declaration_date": "2026-04-23",
   "items": [
     {
       "line": 1,
@@ -335,10 +362,9 @@ Before returning the workbook:
 - Confirm previous merged-cell style risk areas still have styles across all cells: `装箱单!B39:D42`, `发票!B29:D31`, `合同!E30:J31`, `报关委托书!A1:G1`, `报关委托书!A10:G10`, plus merged ranges in `存仓委托书`.
 - Confirm destination country, declaration date, contract date, contract number, unit price column, package total, quantity total, gross weight, and net weight.
 - For 拼箱/混箱, confirm package total uses unique physical cartons and is not multiplied by product-row count.
-- For 差异箱, confirm every non-zero `quantity_delta` is visible in the review notes or report and was not treated as a matching failure.
-- Provide a match-audit table for user review. Keep it compact in the final response for normal shipments; for larger shipments, also save a sidecar CSV next to the final workbook.
-- The match-audit table must compare current shipment vs source `报关名` at minimum: `本次产品名`, `本次SKU/型号`, `本次PCS/CTN`, `本次箱数/总数量`, `源表行`, `源表产品内容`, `源表SKU/规格型号`, `源表pc/ctn`, `HS编码`, `申报品名`, `申报单价V4`, `匹配备注`.
-- If any row has a name mismatch, SKU/model correction, pc/ctn mismatch, shared carton, or difference carton, make that visible in `匹配备注` instead of only mentioning it in prose.
+- For 差异箱, confirm every non-zero `quantity_delta` is accounted for in the working notes/report and was not treated as a matching failure.
+- If every product matched cleanly, return only the workbook path(s) and concise validation notes. Do not include a full match-audit table by default.
+- If any product is unmatched or ambiguous, stop and ask the user with the candidate/missing-product details before generating the final workbook.
 - If a visual/reference workbook is provided, compare sheet structure, formulas, row deletions, and formatting coverage against it.
 
 ## Legacy Generic Script

@@ -1,7 +1,7 @@
 {
   "country": "Canada",
   "country_code": "CA",
-  "ship_date": "2026-04-24",
+  "declaration_date": "2026-04-24",
   "totals": {
     "packages": 5,
     "gross_weight_kg": 9,
