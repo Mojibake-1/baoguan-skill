@@ -197,6 +197,49 @@ def get_stock_value(
     return None
 
 
+def get_unit_price_v4(item: dict[str, Any], matched_stock_row: dict[str, Any]) -> Any:
+    return get_stock_value(
+        item,
+        matched_stock_row,
+        ["unit_price_v4", "price_v4"],
+        ["unit_price_v4", "price_v4", "stock_unit_price_v4", "source_unit_price_v4"],
+    )
+
+
+def get_legacy_unit_price(item: dict[str, Any], matched_stock_row: dict[str, Any]) -> Any:
+    return get_stock_value(
+        item,
+        matched_stock_row,
+        ["unit_price", "price", "old_unit_price", "unit_price_f"],
+        ["unit_price", "price", "old_unit_price", "unit_price_f"],
+    )
+
+
+def validate_unit_price_v4(
+    item: dict[str, Any],
+    index: int,
+    report: dict[str, list[dict[str, Any]]],
+) -> None:
+    matched_stock_row = item.get("matched_stock_row")
+    if not isinstance(matched_stock_row, dict):
+        matched_stock_row = {}
+    if get_unit_price_v4(item, matched_stock_row) is not None:
+        return
+
+    legacy_price = get_legacy_unit_price(item, matched_stock_row)
+    report["errors"].append(
+        {
+            "line": line_id(item, index),
+            "code": "missing_unit_price_v4",
+            "message": (
+                "Missing 申报单价V4. The old 申报单价/申报单价F is not a fallback "
+                "and must not be used for workbook generation."
+            ),
+            "legacy_price_present": legacy_price is not None,
+        }
+    )
+
+
 def validate_required_stock_source_fields(
     item: dict[str, Any],
     index: int,
@@ -222,7 +265,7 @@ def validate_required_stock_source_fields(
         (
             "申报单价V4",
             ["unit_price_v4", "price_v4"],
-            ["stock_unit_price_v4", "source_unit_price_v4"],
+            ["unit_price_v4", "price_v4", "stock_unit_price_v4", "source_unit_price_v4"],
         ),
         (
             "pc/ctn",
@@ -474,6 +517,7 @@ def main() -> None:
             continue
         validate_model_elements_tail(item, index, report)
         validate_brand_code(item, index, report)
+        validate_unit_price_v4(item, index, report)
         validate_required_stock_source_fields(item, index, report)
         validate_quantity_delta(item, index, report, args.max_small_delta_units, args.max_small_delta_pct)
 

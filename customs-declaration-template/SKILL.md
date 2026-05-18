@@ -37,7 +37,7 @@ Use the newest available model for these workers with `reasoning_effort=xhigh` (
 - If `报关名` has no matching product row, run `scripts/notify_missing_product_lark.ps1` once to notify operations contact JOJO before stopping.
 - Treat a `报关名` row as invalid if `报关规格型号` does not match the last pipe-separated segment of `申报用途/申报要素`. This is a source-data error, not a tolerable match. Do not silently use the row, and do not rewrite the tail yourself unless the user explicitly confirms the correct source value.
 - Treat a `报关名` row as invalid if `申报用途/申报要素` brand logic is inconsistent: penultimate segment `无牌` requires first segment `0`; any named brand such as `MXZONE` or `Ucoolbe` requires first segment `4`.
-- Treat a `报关名` row as incomplete if the row used for the declaration lacks `申报单价V4`, `pc/ctn`, `单箱毛重`, or `单箱净重`. Stop and notify operations before generating the workbook.
+- Treat a `报关名` row as incomplete if the row used for the declaration lacks the new `申报单价V4`, `pc/ctn`, `单箱毛重`, or `单箱净重`. Stop and notify operations before generating the workbook. The old `申报单价` / `申报单价F` column is not a fallback.
 - Do not send a full current-shipment-vs-`报关名` match table in every final response. Only show matching details when something is unmatched, ambiguous, or needs the user's choice.
 - `pc/ctn` is not completely fixed. A source `pc/ctn` difference by itself is not an unmatched-product problem and should not trigger a user-facing warning unless it affects carton math, mixed-carton allocation, or a real quantity discrepancy that needs confirmation.
 
@@ -72,7 +72,8 @@ Apply these checks to fresh shared-drive `报关名` rows, user-provided copied 
 - `申报用途/申报要素` is the pipe-separated declaration element string in `报关名!I`, such as `0|0|供真空吸尘器更换使用|无牌|MF001`.
 - The last non-empty segment after `|` in `申报用途/申报要素` must equal `报关规格型号` after trimming whitespace. Example: `E=MF001` and `I=...|MF001` is valid; `E=MF001` and `I=...|PET001` is invalid.
 - The penultimate `申报用途/申报要素` segment is the brand marker. If it is `无牌`, the first segment must be `0`. If it is a named brand, including `MXZONE`, `Ucoolbe`, or another non-empty brand name, the first segment must be `4`.
-- The matched source row must have `申报单价V4`, `pc/ctn`, `单箱毛重`, and `单箱净重`. If any are blank, this is not an agent-fillable value; stop and notify operations.
+- `申报单价V4` in `报关名!H` is the only allowed unit price source. Do not read or copy the old `申报单价` / `申报单价F` column, even if it has a value and V4 is blank.
+- The matched source row must have the new `申报单价V4`, `pc/ctn`, `单箱毛重`, and `单箱净重`. If any are blank, this is not an agent-fillable value; stop and notify operations.
 - A mismatch or missing required source field means the row, copied source, or supplement is wrong. Stop and show the source row, product content, SKU, `报关规格型号`, the full `申报用途/申报要素`, and the missing/conflicting field. Ask the user or operations to correct the source row or provide the correct row.
 - When building declaration JSON, preserve either top-level `stock_model`/`spec_model` or `matched_stock_row.model`, and preserve `matched_stock_row.unit_price_v4`, `matched_stock_row.stock_pc_per_carton`, `matched_stock_row.gross_per_carton`, and `matched_stock_row.net_per_carton` so `scripts/validate_declaration_data.py` can enforce these checks.
 
@@ -84,8 +85,8 @@ powershell -ExecutionPolicy Bypass -File scripts/notify_missing_product_lark.ps1
   -Sku "平台SKU" `
   -Model "报关规格型号" `
   -SourceWorkbook "C:\path\to\fresh-stock-plan-copy.xlsx" `
-  -Reason "源数据表「报关名」中本次报关行缺少必填字段，不能生成报关单。" `
-  -MissingFields "pc/ctn, 单箱毛重"
+  -Reason "源数据表「报关名」中本次报关行缺少必填字段，不能生成报关单。旧申报单价不能替代申报单价V4。" `
+  -MissingFields "申报单价V4, pc/ctn, 单箱毛重"
 ```
 
 ## Daily Invocation
@@ -242,7 +243,7 @@ For item `i`, top row = `21 + (i - 1) * 2`:
 - `I{row}`: 净重 KG = cartons * `报关名!L`, unless the user provides an approved override
 - `J{row}`: 数量 = current task actual total quantity. If this differs from `pc/ctn * physical_cartons`, record the 差异箱 reason and use the actual total after confirmation.
 - `K{row}`: 单位 = `个`. Always write `个` for every declaration item; do not copy `报关名` or JSON item-level units such as `套`.
-- `L{row}`: 单价 from `报关名!H 申报单价V4`
+- `L{row}`: 单价 from `报关名!H 申报单价V4` only. Do not fall back to the old `申报单价` / `申报单价F` column.
 
 ## Row Deletion Rules
 
@@ -394,7 +395,7 @@ Before returning the workbook:
 - Confirm destination country, declaration date, contract date, contract number, unit price column, package total, quantity total, gross weight, and net weight.
 - Confirm every item with `stock_model`, `spec_model`, or `matched_stock_row.model` has `declaration_elements` whose last `|` segment matches that model.
 - Confirm every `declaration_elements` string uses `0|` when the brand segment is `无牌`, and `4|` when the brand segment is a named brand such as `MXZONE` or `Ucoolbe`.
-- Confirm every matched stock row used for generation has `申报单价V4`, `pc/ctn`, `单箱毛重`, and `单箱净重`; if any are missing, stop and notify operations.
+- Confirm every matched stock row used for generation has the new `申报单价V4`, `pc/ctn`, `单箱毛重`, and `单箱净重`; if any are missing, stop and notify operations. A present old `申报单价` / `申报单价F` still counts as missing price if `申报单价V4` is blank.
 - For 拼箱/混箱, confirm package total uses unique physical cartons and is not multiplied by product-row count.
 - For 差异箱, confirm every non-zero `quantity_delta` is accounted for in the working notes/report and was not treated as a matching failure.
 - If every product matched cleanly, return only the workbook path(s) and concise validation notes. Do not include a full match-audit table by default.

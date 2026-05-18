@@ -276,9 +276,13 @@ try {
         $row = 21 + ($index * 2)
         $lineNo = Get-Prop $item @("line_no", "line") ($index + 1)
         $unit = $defaultUnit
-        $unitPrice = Get-Prop $item @("unit_price", "unit_price_v4", "price_v4", "price") $null
+        $unitPrice = Get-Prop $item @("unit_price_v4", "price_v4", "stock_unit_price_v4", "source_unit_price_v4") $null
         if ($null -eq $unitPrice) {
-            throw "Missing unit price for item line $lineNo."
+            $legacyUnitPrice = Get-Prop $item @("unit_price", "price", "old_unit_price", "unit_price_f") $null
+            if ($null -ne $legacyUnitPrice) {
+                throw "Missing 申报单价V4 for item line $lineNo. Legacy 申报单价 is present but must not be used."
+            }
+            throw "Missing 申报单价V4 for item line $lineNo."
         }
 
         Set-MergedValue $inputSheet "B$row" $lineNo
