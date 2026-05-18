@@ -8,6 +8,10 @@
 
     [string]$SourceWorkbook,
 
+    [string]$Reason = "源数据表「报关名」未找到本次报关产品，请补充后再生成报关单。",
+
+    [string]$MissingFields,
+
     [string]$RecipientQuery = "JOJO",
 
     [string]$Identity = "user",
@@ -66,7 +70,7 @@ if ($null -eq $recipient) {
 
 $lines = @(
     "【报关单数据源缺失提醒】",
-    "源数据表「报关名」未找到本次报关产品，请补充后再生成报关单。",
+    $Reason,
     "产品：$Product"
 )
 if ($Sku) {
@@ -78,7 +82,10 @@ if ($Model) {
 if ($SourceWorkbook) {
     $lines += "源表：$SourceWorkbook"
 }
-$lines += "处理建议：请在 amz 备货计划「报关名」补齐 HS 编码、报关商品名称、申报用途、申报单价V4、pc/ctn、单箱毛重、单箱净重。"
+if ($MissingFields) {
+    $lines += "缺失字段：$MissingFields"
+}
+$lines += "处理建议：请在 amz 备货计划「报关名」补齐 HS 编码、报关商品名称、报关规格型号、申报用途、申报单价V4、pc/ctn、单箱毛重、单箱净重。"
 $message = $lines -join "`n"
 
 $sendArgs = @(

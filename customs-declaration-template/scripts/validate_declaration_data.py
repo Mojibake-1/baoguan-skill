@@ -56,6 +56,214 @@ def line_id(item: dict[str, Any], index: int) -> str:
     return str(item.get("line") or item.get("line_no") or index + 1)
 
 
+def first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def normalize_model_token(value: Any) -> str:
+    return "".join(str(value or "").split()).upper()
+
+
+def declaration_elements_tail(value: Any) -> str | None:
+    text = str(value or "").replace("｜", "|").strip()
+    if not text or "|" not in text:
+        return None
+    parts = [part.strip() for part in text.split("|") if part.strip()]
+    if not parts:
+        return None
+    return parts[-1]
+
+
+def declaration_elements_parts(value: Any) -> list[str]:
+    text = str(value or "").replace("｜", "|").strip()
+    if not text or "|" not in text:
+        return []
+    return [part.strip() for part in text.split("|")]
+
+
+def is_brandless(value: Any) -> bool:
+    token = str(value or "").strip().upper().replace(" ", "")
+    return token in {"无牌", "无品牌", "NOBRAND", "NO-BRAND", "NONE", "N/A", "NA"}
+
+
+def validate_model_elements_tail(
+    item: dict[str, Any],
+    index: int,
+    report: dict[str, list[dict[str, Any]]],
+) -> None:
+    matched_stock_row = item.get("matched_stock_row")
+    if not isinstance(matched_stock_row, dict):
+        matched_stock_row = {}
+
+    model = first_present(
+        item.get("stock_model"),
+        item.get("declaration_model"),
+        item.get("spec_model"),
+        item.get("model"),
+        matched_stock_row.get("model"),
+        matched_stock_row.get("spec_model"),
+        matched_stock_row.get("declaration_model"),
+    )
+    if model in (None, ""):
+        return
+
+    elements = first_present(
+        item.get("declaration_elements"),
+        item.get("declaration_purpose"),
+        item.get("description_spec"),
+        item.get("elements"),
+    )
+    line = line_id(item, index)
+    if elements in (None, ""):
+        report["errors"].append(
+            {
+                "line": line,
+                "code": "missing_declaration_elements",
+                "message": "Item has a stock model but no declaration elements/spec string.",
+            }
+        )
+        return
+
+    tail = declaration_elements_tail(elements)
+    if tail is None:
+        report["errors"].append(
+            {
+                "line": line,
+                "code": "declaration_elements_missing_model_tail",
+                "message": "Declaration elements must end with the stock model after a pipe separator.",
+            }
+        )
+        return
+
+    if normalize_model_token(model) != normalize_model_token(tail):
+        report["errors"].append(
+            {
+                "line": line,
+                "code": "model_elements_tail_mismatch",
+                "message": (
+                    f"Stock model is {model!s}, but declaration elements tail is {tail!s}. "
+                    "Fix the source row before generating the workbook."
+                ),
+            }
+        )
+
+
+def validate_brand_code(
+    item: dict[str, Any],
+    index: int,
+    report: dict[str, list[dict[str, Any]]],
+) -> None:
+    elements = first_present(
+        item.get("declaration_elements"),
+        item.get("declaration_purpose"),
+        item.get("description_spec"),
+        item.get("elements"),
+    )
+    parts = declaration_elements_parts(elements)
+    if len(parts) < 2:
+        return
+
+    first_code = parts[0].strip()
+    brand = parts[-2].strip()
+    expected = "0" if is_brandless(brand) else "4"
+    if first_code != expected:
+        report["errors"].append(
+            {
+                "line": line_id(item, index),
+                "code": "brand_code_mismatch",
+                "message": (
+                    f"Declaration elements brand is {brand!s}, so the first segment must be "
+                    f"{expected}, but found {first_code!s}."
+                ),
+            }
+        )
+
+
+def get_stock_value(
+    item: dict[str, Any],
+    matched_stock_row: dict[str, Any],
+    row_names: list[str],
+    item_names: list[str],
+) -> Any:
+    for name in row_names:
+        if name in matched_stock_row and matched_stock_row.get(name) not in (None, ""):
+            return matched_stock_row.get(name)
+    for name in item_names:
+        if name in item and item.get(name) not in (None, ""):
+            return item.get(name)
+    return None
+
+
+def validate_required_stock_source_fields(
+    item: dict[str, Any],
+    index: int,
+    report: dict[str, list[dict[str, Any]]],
+) -> None:
+    matched_stock_row = item.get("matched_stock_row")
+    if not isinstance(matched_stock_row, dict):
+        matched_stock_row = {}
+
+    has_stock_metadata = bool(matched_stock_row) or any(
+        key in item
+        for key in (
+            "stock_pc_per_carton",
+            "stock_gross_per_carton",
+            "stock_net_per_carton",
+            "stock_unit_price_v4",
+        )
+    )
+    if not has_stock_metadata:
+        return
+
+    required = [
+        (
+            "申报单价V4",
+            ["unit_price_v4", "price_v4"],
+            ["stock_unit_price_v4", "source_unit_price_v4"],
+        ),
+        (
+            "pc/ctn",
+            ["stock_pc_per_carton", "pc_per_carton", "pcs_per_carton"],
+            ["stock_pc_per_carton", "source_pc_per_carton"],
+        ),
+        (
+            "单箱毛重",
+            ["gross_per_carton", "stock_gross_per_carton", "gross_weight_per_carton"],
+            ["stock_gross_per_carton", "source_gross_per_carton"],
+        ),
+        (
+            "单箱净重",
+            ["net_per_carton", "stock_net_per_carton", "net_weight_per_carton"],
+            ["stock_net_per_carton", "source_net_per_carton"],
+        ),
+    ]
+    missing = [
+        label
+        for label, row_names, item_names in required
+        if get_stock_value(item, matched_stock_row, row_names, item_names) is None
+    ]
+    if missing:
+        product = first_present(item.get("source_product_name"), matched_stock_row.get("content"), "")
+        sku = first_present(item.get("source_sku"), matched_stock_row.get("platform_sku"), "")
+        report["errors"].append(
+            {
+                "line": line_id(item, index),
+                "code": "missing_stock_source_fields",
+                "message": (
+                    "Matched stock row is missing required source fields: "
+                    f"{', '.join(missing)}. Stop and notify operations before generating the workbook."
+                ),
+                "missing_fields": missing,
+                "product": product,
+                "sku": sku,
+                "stock_row": matched_stock_row.get("stock_plan_row") or matched_stock_row.get("row_no"),
+            }
+        )
+
+
 def validate_quantity_delta(
     item: dict[str, Any],
     index: int,
@@ -264,6 +472,9 @@ def main() -> None:
                 {"line": str(index + 1), "code": "invalid_item", "message": "Item must be an object."}
             )
             continue
+        validate_model_elements_tail(item, index, report)
+        validate_brand_code(item, index, report)
+        validate_required_stock_source_fields(item, index, report)
         validate_quantity_delta(item, index, report, args.max_small_delta_units, args.max_small_delta_pct)
 
     validate_carton_groups(items, report)

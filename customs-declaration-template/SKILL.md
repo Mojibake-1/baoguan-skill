@@ -19,9 +19,10 @@ Use the newest available model for these workers with `reasoning_effort=xhigh` (
 2. Normalize packing before product matching conclusions: blank carton cells, merged carton cells, 拼箱/混箱, and 差异箱 must be resolved first.
 3. For any shared/mixed carton group, collect either final allocated gross/net weights with a source note, or the allocation inputs: group warehouse gross weight, each SKU's unit product weight, and whether quantities are per carton or total.
 4. Match products against `报关名`. If a product cannot be matched or has multiple plausible candidates, stop and ask the user with the candidate rows.
-5. Build a declaration JSON and run `scripts/validate_declaration_data.py` before Excel generation whenever there is 拼箱/混箱/合并箱数/差异箱. Do not generate the workbook if validation has errors.
-6. Only after validation passes, create the final workbook with Excel COM.
-7. Return the final workbook path(s) and concise validation notes. Do not include a full match-audit table by default.
+5. Before adopting any matched row, validate the `报关名` row integrity rules below, especially `报关规格型号` vs `申报用途/申报要素` tail consistency, brand code consistency, and required source fields. If a matched row fails, stop before JSON/workbook generation.
+6. Build a declaration JSON and run `scripts/validate_declaration_data.py` before Excel generation. This is mandatory for 拼箱/混箱/合并箱数/差异箱 and whenever the JSON includes matched stock-row metadata. Do not generate the workbook if validation has errors.
+7. Only after validation passes, create the final workbook with Excel COM.
+8. Return the final workbook path(s) and concise validation notes. Do not include a full match-audit table by default.
 
 ## Non-Negotiable Rules
 
@@ -34,6 +35,9 @@ Use the newest available model for these workers with `reasoning_effort=xhigh` (
 - Do not rewrite downstream sheets. After `报关资料录入` is correct, downstream sheets should only have extra rows deleted. The only allowed downstream formula edit is the known `#REF!` repair listed below.
 - Do not invent customs data. If `报关名` has no matching product row, stop and ask the user/operations to add the row.
 - If `报关名` has no matching product row, run `scripts/notify_missing_product_lark.ps1` once to notify operations contact JOJO before stopping.
+- Treat a `报关名` row as invalid if `报关规格型号` does not match the last pipe-separated segment of `申报用途/申报要素`. This is a source-data error, not a tolerable match. Do not silently use the row, and do not rewrite the tail yourself unless the user explicitly confirms the correct source value.
+- Treat a `报关名` row as invalid if `申报用途/申报要素` brand logic is inconsistent: penultimate segment `无牌` requires first segment `0`; any named brand such as `MXZONE` or `Ucoolbe` requires first segment `4`.
+- Treat a `报关名` row as incomplete if the row used for the declaration lacks `申报单价V4`, `pc/ctn`, `单箱毛重`, or `单箱净重`. Stop and notify operations before generating the workbook.
 - Do not send a full current-shipment-vs-`报关名` match table in every final response. Only show matching details when something is unmatched, ambiguous, or needs the user's choice.
 - `pc/ctn` is not completely fixed. A source `pc/ctn` difference by itself is not an unmatched-product problem and should not trigger a user-facing warning unless it affects carton math, mixed-carton allocation, or a real quantity discrepancy that needs confirmation.
 
@@ -50,13 +54,39 @@ Use the newest available model for these workers with `reasoning_effort=xhigh` (
   - `A`: 海关编码
   - `B`: 报关商品名称
   - `C`: 产品内容, the primary matching field
-  - `D`: 报关规格型号 / model reference
-  - `E`: 对应平台 SKU, support only, not the primary key
-  - `G`: 申报单价V4, the current unit-price column
-  - `H`: pc/ctn
-  - `I`: 单箱毛重
-  - `J`: 单箱净重
-- Do not use old price column `F` when the user says to use `申报单价V4`.
+  - `D`: 单位, support only; final workbook still writes `个`
+  - `E`: 报关规格型号 / model reference
+  - `F`: 对应平台 SKU, support only, not the primary key
+  - `H`: 申报单价V4, the current unit-price column
+  - `I`: 申报用途 / 申报要素, copied into `报关资料录入!E{row+1}`
+  - `J`: pc/ctn
+  - `K`: 单箱毛重
+  - `L`: 单箱净重
+- Do not use old price columns such as `G` when the user says to use `申报单价V4`.
+
+## 报关名 Row Integrity Rules
+
+Apply these checks to fresh shared-drive `报关名` rows, user-provided copied rows, supplement rows, and final declaration JSON before generating a workbook:
+
+- `报关规格型号` is the model code in `报关名!E`, such as `MF001`.
+- `申报用途/申报要素` is the pipe-separated declaration element string in `报关名!I`, such as `0|0|供真空吸尘器更换使用|无牌|MF001`.
+- The last non-empty segment after `|` in `申报用途/申报要素` must equal `报关规格型号` after trimming whitespace. Example: `E=MF001` and `I=...|MF001` is valid; `E=MF001` and `I=...|PET001` is invalid.
+- The penultimate `申报用途/申报要素` segment is the brand marker. If it is `无牌`, the first segment must be `0`. If it is a named brand, including `MXZONE`, `Ucoolbe`, or another non-empty brand name, the first segment must be `4`.
+- The matched source row must have `申报单价V4`, `pc/ctn`, `单箱毛重`, and `单箱净重`. If any are blank, this is not an agent-fillable value; stop and notify operations.
+- A mismatch or missing required source field means the row, copied source, or supplement is wrong. Stop and show the source row, product content, SKU, `报关规格型号`, the full `申报用途/申报要素`, and the missing/conflicting field. Ask the user or operations to correct the source row or provide the correct row.
+- When building declaration JSON, preserve either top-level `stock_model`/`spec_model` or `matched_stock_row.model`, and preserve `matched_stock_row.unit_price_v4`, `matched_stock_row.stock_pc_per_carton`, `matched_stock_row.gross_per_carton`, and `matched_stock_row.net_per_carton` so `scripts/validate_declaration_data.py` can enforce these checks.
+
+If `scripts/validate_declaration_data.py` reports `missing_stock_source_fields`, run the notification script once before stopping:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/notify_missing_product_lark.ps1 `
+  -Product "产品名称" `
+  -Sku "平台SKU" `
+  -Model "报关规格型号" `
+  -SourceWorkbook "C:\path\to\fresh-stock-plan-copy.xlsx" `
+  -Reason "源数据表「报关名」中本次报关行缺少必填字段，不能生成报关单。" `
+  -MissingFields "pc/ctn, 单箱毛重"
+```
 
 ## Daily Invocation
 
@@ -122,7 +152,7 @@ On a new machine, confirm these before the first production run:
 - The shared-drive stock plan path is reachable and can be copied read-only.
 - Desktop Microsoft Excel is installed on Windows, because final generation relies on Excel COM.
 - The bundled template `assets/declaration-long-template.xlsx` is still the approved company template, or the user provides the updated template.
-- The stock-plan `报关名` columns still match the expected structure, especially `C 产品内容`, `G 申报单价V4`, `H pc/ctn`, `I 单箱毛重`, and `J 单箱净重`.
+- The stock-plan `报关名` columns still match the expected structure, especially `C 产品内容`, `E 报关规格型号`, `H 申报单价V4`, `I 申报用途/申报要素`, `J pc/ctn`, `K 单箱毛重`, and `L 单箱净重`.
 - The output folder is confirmed.
 - Any new destination country code is confirmed by the user before generating the contract number.
 - The first generated file is compared against a known-good historical declaration workbook for formulas, row deletion, merged-cell styles, formula cache values, and date formats.
@@ -133,7 +163,7 @@ On a new machine, confirm these before the first production run:
 2. Normalize conservatively: remove trailing country/site suffixes such as `UK`, `US`, `CA`, `UC-CA`, `UC`, `DE`, extra spaces, and punctuation. Keep meaningful model, pack count, and product words.
 3. If full name fails, extract core terms. Example: `2个装三角拖UK` -> `2个装三角拖`, which can match `2个装三角拖把头`.
 4. Use SKU/model only as supporting evidence or tie-breaker after name and pack/quantity plausibility. Do not use SKU as the primary key.
-5. If multiple plausible candidates exist, show candidate rows with `产品内容`, `报关商品名称`, `报关规格型号`, `海关编码`, `申报单价V4`, `pc/ctn`, `毛重`, `净重`, and ask the user to choose.
+5. If multiple plausible candidates exist, show candidate rows with `产品内容`, `报关商品名称`, `报关规格型号`, `申报用途/申报要素`, `海关编码`, `申报单价V4`, `pc/ctn`, `毛重`, `净重`, and ask the user to choose.
 6. If source `pc/ctn` conflicts with the current task, do not treat that alone as a failed match. Use the current task's actual total quantity and carton data. Only ask the user when the product identity is unclear, the quantity discrepancy is not explained by the shipment source, or the mixed-carton weight allocation depends on the conflict.
 
 ## Unmatched or Ambiguous Match Output
@@ -144,10 +174,10 @@ Only show matching details to the user when:
 
 - no `报关名` row can be matched for a current product;
 - multiple plausible candidates exist and the user must choose;
-- product name/SKU/model evidence conflicts enough to affect the HS code, declaration name, declaration elements, or unit price;
+- product name/SKU/model evidence conflicts enough to affect the HS code, declaration name, declaration elements, model-tail consistency, brand code consistency, required source fields, or unit price;
 - a quantity/difference-carton issue exceeds the confirmation threshold and is not already clearly marked by the user's source.
 
-When asking the user, include the relevant candidate rows with `产品内容`, `报关商品名称`, `报关规格型号`, `海关编码`, `申报单价V4`, `pc/ctn`, `毛重`, and `净重`.
+When asking the user, include the relevant candidate rows with `产品内容`, `报关商品名称`, `报关规格型号`, `申报用途/申报要素`, `海关编码`, `申报单价V4`, `pc/ctn`, `毛重`, and `净重`.
 
 When no product row matches, send a Feishu notification before stopping. This step is mandatory even if the user did not ask for notification:
 
@@ -206,13 +236,13 @@ For item `i`, top row = `21 + (i - 1) * 2`:
 - `B{row}`: 项号
 - `C{row}`: 海关商品编码 from `报关名!A`
 - `E{row}`: 商品名称 from `报关名!B`
-- `E{row+1}`: 申报要素/spec string from `报关名!G` or the confirmed generated declaration elements
+- `E{row+1}`: 申报要素/spec string from `报关名!I` or the confirmed generated declaration elements
 - `G{row}`: 件数 = declaration-row `cartons`. For shared carton groups, this may be `0` on co-packed rows so physical cartons are counted only once.
-- `H{row}`: 毛重 KG = cartons * `报关名!I`, unless the user provides an approved override
-- `I{row}`: 净重 KG = cartons * `报关名!J`, unless the user provides an approved override
+- `H{row}`: 毛重 KG = cartons * `报关名!K`, unless the user provides an approved override
+- `I{row}`: 净重 KG = cartons * `报关名!L`, unless the user provides an approved override
 - `J{row}`: 数量 = current task actual total quantity. If this differs from `pc/ctn * physical_cartons`, record the 差异箱 reason and use the actual total after confirmation.
 - `K{row}`: 单位 = `个`. Always write `个` for every declaration item; do not copy `报关名` or JSON item-level units such as `套`.
-- `L{row}`: 单价 from `报关名!G 申报单价V4`
+- `L{row}`: 单价 from `报关名!H 申报单价V4`
 
 ## Row Deletion Rules
 
@@ -291,6 +321,7 @@ The JSON may use either normalized fields or the report shape produced during ma
       "hs_code": "8508709000",
       "declaration_name": "吸尘器配件",
       "declaration_elements": "4|0|供真空吸尘器更换使用|MXZONE|TS5PRO",
+      "stock_model": "TS5PRO",
       "cartons": 10,
       "gross_weight_kg": 164,
       "net_weight_kg": 154,
@@ -361,6 +392,9 @@ Before returning the workbook:
 - Confirm formula caches are present by checking downstream totals after Excel recalculation, especially `装箱单!E35/H35/I35`, `发票!J24`, `合同!J28`, `存仓委托书!C10/C11/D12`, and `报关委托书!B20/C20`.
 - Confirm previous merged-cell style risk areas still have styles across all cells: `装箱单!B39:D42`, `发票!B29:D31`, `合同!E30:J31`, `报关委托书!A1:G1`, `报关委托书!A10:G10`, plus merged ranges in `存仓委托书`.
 - Confirm destination country, declaration date, contract date, contract number, unit price column, package total, quantity total, gross weight, and net weight.
+- Confirm every item with `stock_model`, `spec_model`, or `matched_stock_row.model` has `declaration_elements` whose last `|` segment matches that model.
+- Confirm every `declaration_elements` string uses `0|` when the brand segment is `无牌`, and `4|` when the brand segment is a named brand such as `MXZONE` or `Ucoolbe`.
+- Confirm every matched stock row used for generation has `申报单价V4`, `pc/ctn`, `单箱毛重`, and `单箱净重`; if any are missing, stop and notify operations.
 - For 拼箱/混箱, confirm package total uses unique physical cartons and is not multiplied by product-row count.
 - For 差异箱, confirm every non-zero `quantity_delta` is accounted for in the working notes/report and was not treated as a matching failure.
 - If every product matched cleanly, return only the workbook path(s) and concise validation notes. Do not include a full match-audit table by default.
