@@ -17,6 +17,11 @@ CENT = Decimal("0.01")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate customs declaration data JSON.")
     parser.add_argument("--input", required=True, type=Path, help="approved declaration JSON")
+    parser.add_argument(
+        "--source-shipment-json",
+        type=Path,
+        help="original extracted AMZ/ticket source JSON; required when items carry source_row/source_rows",
+    )
     parser.add_argument("--output", type=Path, help="optional JSON validation report path")
     parser.add_argument("--max-small-delta-units", type=Decimal, default=Decimal("2"))
     parser.add_argument("--max-small-delta-pct", type=Decimal, default=Decimal("0.05"))
@@ -61,6 +66,71 @@ def first_present(*values: Any) -> Any:
         if value not in (None, ""):
             return value
     return None
+
+
+def boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "red"}
+
+
+def load_source_rows(path: Path) -> dict[int, dict[str, Any]]:
+    with path.open("r", encoding="utf-8-sig") as handle:
+        data = json.load(handle)
+    rows = data.get("rows") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        raise ValueError("Source shipment JSON must be an object with rows[] or a row list.")
+
+    by_row: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_no = as_decimal(first_present(row.get("row"), row.get("source_row"), row.get("line")))
+        if row_no is None:
+            continue
+        by_row[int(row_no)] = row
+    return by_row
+
+
+def source_row_numbers(item: dict[str, Any]) -> list[int]:
+    raw_rows = item.get("source_rows")
+    if isinstance(raw_rows, list):
+        result: list[int] = []
+        for raw in raw_rows:
+            row_no = as_decimal(raw)
+            if row_no is not None:
+                result.append(int(row_no))
+        return result
+
+    row_no = as_decimal(item.get("source_row"))
+    if row_no is None:
+        return []
+    return [int(row_no)]
+
+
+def source_row_quantity(row: dict[str, Any]) -> Decimal | None:
+    return as_decimal(
+        first_present(
+            row.get("quantity"),
+            row.get("total_quantity"),
+            row.get("total"),
+            row.get("数量"),
+        )
+    )
+
+
+def source_row_quantity_is_red(row: dict[str, Any]) -> bool:
+    return any(
+        boolish(row.get(name))
+        for name in (
+            "quantity_red",
+            "total_quantity_red",
+            "total_red",
+            "数量_red",
+        )
+    )
 
 
 def normalize_model_token(value: Any) -> str:
@@ -367,6 +437,95 @@ def validate_quantity_delta(
     )
 
 
+def validate_source_quantity_integrity(
+    items: list[dict[str, Any]],
+    source_rows: dict[int, dict[str, Any]],
+    report: dict[str, list[dict[str, Any]]],
+) -> None:
+    for index, item in enumerate(items):
+        line = line_id(item, index)
+        rows = source_row_numbers(item)
+        if not rows:
+            report["errors"].append(
+                {
+                    "line": line,
+                    "code": "missing_source_row_reference",
+                    "message": (
+                        "Item is missing source_row/source_rows, so declaration quantity cannot be "
+                        "audited against the original AMZ shipment source."
+                    ),
+                }
+            )
+            continue
+
+        source_total = Decimal("0")
+        missing_rows: list[int] = []
+        missing_quantities: list[int] = []
+        red_rows: list[int] = []
+        for row_no in rows:
+            source_row = source_rows.get(row_no)
+            if source_row is None:
+                missing_rows.append(row_no)
+                continue
+            quantity = source_row_quantity(source_row)
+            if quantity is None:
+                missing_quantities.append(row_no)
+                continue
+            source_total += quantity
+            if source_row_quantity_is_red(source_row):
+                red_rows.append(row_no)
+
+        if missing_rows:
+            report["errors"].append(
+                {
+                    "line": line,
+                    "code": "source_row_not_found",
+                    "message": f"Source row(s) not found in shipment source JSON: {missing_rows}.",
+                }
+            )
+            continue
+        if missing_quantities:
+            report["errors"].append(
+                {
+                    "line": line,
+                    "code": "source_row_missing_quantity",
+                    "message": f"Source row(s) are missing quantity values: {missing_quantities}.",
+                }
+            )
+            continue
+
+        declaration_quantity = as_decimal(item.get("quantity") or item.get("total"))
+        if declaration_quantity is None:
+            report["errors"].append(
+                {
+                    "line": line,
+                    "code": "missing_declaration_quantity",
+                    "message": "Item is missing declaration quantity.",
+                }
+            )
+            continue
+
+        if declaration_quantity != source_total:
+            report["errors"].append(
+                {
+                    "line": line,
+                    "code": "source_quantity_mismatch",
+                    "message": (
+                        f"Original shipment source row(s) {rows} sum to {fmt(source_total)}, "
+                        f"but declaration quantity is {fmt(declaration_quantity)}. "
+                        "Mixed-carton inputs may allocate weights only; they must never override "
+                        "the AMZ source quantity, especially red-marked difference quantities."
+                    ),
+                    "source_rows": rows,
+                    "red_quantity_rows": red_rows,
+                    "source_quantity": fmt(source_total),
+                    "declaration_quantity": fmt(declaration_quantity),
+                    "product": first_present(item.get("source_product_name"), item.get("declaration_name"), ""),
+                    "sku": item.get("source_sku") or "",
+                }
+            )
+
+
 def validate_carton_groups(items: list[dict[str, Any]], report: dict[str, list[dict[str, Any]]]) -> None:
     groups: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
     for index, item in enumerate(items):
@@ -520,6 +679,22 @@ def main() -> None:
         validate_unit_price_v4(item, index, report)
         validate_required_stock_source_fields(item, index, report)
         validate_quantity_delta(item, index, report, args.max_small_delta_units, args.max_small_delta_pct)
+
+    has_source_refs = any(isinstance(item, dict) and source_row_numbers(item) for item in items)
+    if args.source_shipment_json:
+        source_rows = load_source_rows(args.source_shipment_json)
+        validate_source_quantity_integrity(items, source_rows, report)
+    elif has_source_refs:
+        report["errors"].append(
+            {
+                "code": "missing_source_quantity_audit",
+                "message": (
+                    "Declaration items include source_row/source_rows but validation was run without "
+                    "--source-shipment-json. Run the validator against the original AMZ/ticket source "
+                    "JSON before Excel generation."
+                ),
+            }
+        )
 
     validate_carton_groups(items, report)
     validate_totals(data, items, report)

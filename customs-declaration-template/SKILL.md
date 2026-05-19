@@ -20,7 +20,7 @@ Use the newest available model for these workers with `reasoning_effort=xhigh` (
 3. For any shared/mixed carton group, collect either final allocated gross/net weights with a source note, or the allocation inputs: group warehouse gross weight, each SKU's unit product weight, and whether quantities are per carton or total.
 4. Match products against `报关名`. If a product cannot be matched or has multiple plausible candidates, stop and ask the user with the candidate rows.
 5. Before adopting any matched row, validate the `报关名` row integrity rules below, especially `报关规格型号` vs `申报用途/申报要素` tail consistency, brand code consistency, and required source fields. If a matched row fails, stop before JSON/workbook generation.
-6. Build a declaration JSON and run `scripts/validate_declaration_data.py` before Excel generation. This is mandatory for 拼箱/混箱/合并箱数/差异箱 and whenever the JSON includes matched stock-row metadata. Do not generate the workbook if validation has errors.
+6. Build a declaration JSON and run `scripts/validate_declaration_data.py --source-shipment-json <ticket-source.json>` before Excel generation. This source-quantity audit is mandatory for every real declaration JSON that has `source_row` or `source_rows`, and it is especially mandatory for 拼箱/混箱/合并箱数/差异箱. Do not generate the workbook if validation has errors.
 7. Only after validation passes, create the final workbook with Excel COM.
 8. Return the final workbook path(s) and concise validation notes. Do not include a full match-audit table by default.
 
@@ -40,6 +40,8 @@ Use the newest available model for these workers with `reasoning_effort=xhigh` (
 - Treat a `报关名` row as incomplete if the row used for the declaration lacks the new `申报单价V4`, `pc/ctn`, `单箱毛重`, or `单箱净重`. Stop and notify operations before generating the workbook. The old `申报单价` / `申报单价F` column is not a fallback.
 - Do not send a full current-shipment-vs-`报关名` match table in every final response. Only show matching details when something is unmatched, ambiguous, or needs the user's choice.
 - `pc/ctn` is not completely fixed. A source `pc/ctn` difference by itself is not an unmatched-product problem and should not trigger a user-facing warning unless it affects carton math, mixed-carton allocation, or a real quantity discrepancy that needs confirmation.
+- Shipment source quantity is the declaration quantity source of truth. For every item with `source_row` or `source_rows`, `quantity` must equal the original AMZ/ticket source row quantity sum exactly. This includes red-marked difference quantities. Mixed-carton allocation inputs are allowed to allocate gross/net weights only; they must never overwrite `quantity`.
+- Treat `source_quantity_mismatch` or `missing_source_quantity_audit` from `scripts/validate_declaration_data.py` as a hard blocker. Do not downgrade it to a warning, and do not proceed because Excel totals match the generated JSON.
 
 - For shared/mixed carton rows, never promise final workbook generation after only confirming destination/date/carton grouping. Also require mixed-carton weight allocation inputs or final allocated gross/net weights with a source note.
 - When asking for mixed-carton weight inputs, explicitly request all required fields: group warehouse gross weight, each SKU's unit product weight, and whether quantities are per carton or total. Do not say "or use the existing rule" unless those exact inputs are already available in the current source.
@@ -202,13 +204,15 @@ For 拼箱/混箱/merged carton cells/差异箱 tasks, normalize the shipment be
 - For a shared carton group, never write the same physical carton count on every SKU row. In working JSON, write the group's carton count on the first line of the group and `0` on the other lines, so the package total is not overstated. In the final workbook, merge the `报关资料录入` column `G` cells across that shared group and display the carton count once.
 - If the source has visible carton counts `10`, `7`, and one shared `5` with blank cells on adjacent product rows, the package total is `22`, not `37`. Blank carton cells are not independent 5-carton rows.
 - Preserve the actual user/source total quantity in `quantity`. Do not silently replace it with `pc/ctn * 箱数`.
+- In mixed-carton groups, use allocation-input SKU quantities only as the denominator for weight allocation. After allocation, reset/verify each declaration item `quantity` against the AMZ/ticket source row quantity. If the allocation input quantity differs from the source row quantity, the source row quantity wins for declaration `quantity`, and the mismatch must be visible in the validation report before generation.
+- Red-marked quantity cells are intentional operational overrides, not values to recalculate. Never replace a red source quantity with a carton-standard quantity, stock-plan `pc/ctn`, or mixed-carton allocation quantity.
 - For every line where actual quantity differs from the standard calculation, record the difference in `quantity_delta` and include a short note such as `5箱标准每箱7，实际36，+1`.
 - If a difference is larger than 2 units or larger than 5%, ask the user to confirm before final generation.
 - Do not multiply full-carton stock weights across every row in a shared carton group unless the user or operations confirms that allocation. Prefer explicit mixed-carton gross/net weights or an approved allocation note.
 - If mixed-carton gross/net allocation inputs are missing, stop and ask for them before final workbook generation.
 - If the source provides 仓库毛重, SKU 单品重量, and SKU 数量 for a mixed carton, allocate line gross/net weights with `scripts/allocate_mixed_carton_weights.py`; it applies the fixed `仓库毛重 - 1kg` net-weight rule and 2-decimal compensation rounding.
 - Even for simulated packing tests, do not simulate HS code, declaration name, declaration elements/申报用途, or unit price if the shared stock-plan source is reachable. Match those fields from the fresh `报关名` copy, and clearly label only the packing-specific fields as simulated.
-- Run `scripts/validate_declaration_data.py` on the approved JSON before final generation whenever the task includes 拼箱, 混箱, 合并箱数, or 差异箱.
+- Run `scripts/validate_declaration_data.py --source-shipment-json <ticket-source.json>` on the approved JSON before final generation. If the declaration JSON contains `source_row` or `source_rows` and the validator is run without the source file, validation must fail.
 
 ## Header Rules
 
@@ -241,7 +245,7 @@ For item `i`, top row = `21 + (i - 1) * 2`:
 - `G{row}`: 件数 = declaration-row `cartons`. For shared carton groups, this may be `0` on co-packed rows so physical cartons are counted only once.
 - `H{row}`: 毛重 KG = cartons * `报关名!K`, unless the user provides an approved override
 - `I{row}`: 净重 KG = cartons * `报关名!L`, unless the user provides an approved override
-- `J{row}`: 数量 = current task actual total quantity. If this differs from `pc/ctn * physical_cartons`, record the 差异箱 reason and use the actual total after confirmation.
+- `J{row}`: 数量 = original AMZ/ticket source row quantity sum for that declaration item. If this differs from `pc/ctn * physical_cartons`, record the 差异箱 reason and use the source actual quantity after confirmation. Do not take `J{row}` from mixed-carton allocation inputs except when the user explicitly identifies those inputs as the corrected AMZ source quantity.
 - `K{row}`: 单位 = `个`. Always write `个` for every declaration item; do not copy `报关名` or JSON item-level units such as `套`.
 - `L{row}`: 单价 from `报关名!H 申报单价V4` only. Do not fall back to the old `申报单价` / `申报单价F` column.
 
@@ -375,12 +379,13 @@ python scripts/allocate_mixed_carton_weights.py `
   --output outputs/mixed-carton-weight-allocation.json
 ```
 
-Before final generation, validate the approved declaration JSON:
+Before final generation on a real declaration, validate the approved declaration JSON against the original extracted ticket source:
 
 ```powershell
 python scripts/validate_declaration_data.py `
-  --input assets/sample-complex-packing-declaration-data.json `
-  --output outputs/complex-packing-validation-report.json
+  --input .analysis/tickets-YYMMDD/ticket-XX-declaration-data.json `
+  --source-shipment-json .analysis/tickets-YYMMDD/ticket-XX-source.json `
+  --output .analysis/tickets-YYMMDD/ticket-XX-validation-report.json
 ```
 
 The script copies the template to the output path, fills `报关资料录入`, deletes extra rows, repairs known `#REF!` formulas, recalculates with Excel, and saves.
@@ -393,11 +398,12 @@ Before returning the workbook:
 - Confirm formula caches are present by checking downstream totals after Excel recalculation, especially `装箱单!E35/H35/I35`, `发票!J24`, `合同!J28`, `存仓委托书!C10/C11/D12`, and `报关委托书!B20/C20`.
 - Confirm previous merged-cell style risk areas still have styles across all cells: `装箱单!B39:D42`, `发票!B29:D31`, `合同!E30:J31`, `报关委托书!A1:G1`, `报关委托书!A10:G10`, plus merged ranges in `存仓委托书`.
 - Confirm destination country, declaration date, contract date, contract number, unit price column, package total, quantity total, gross weight, and net weight.
+- Independently compare each final `报关资料录入!J` quantity against the original AMZ/ticket source row quantity sum, not only against the declaration JSON. Excel matching JSON is insufficient if the JSON was built from the wrong quantity source.
 - Confirm every item with `stock_model`, `spec_model`, or `matched_stock_row.model` has `declaration_elements` whose last `|` segment matches that model.
 - Confirm every `declaration_elements` string uses `0|` when the brand segment is `无牌`, and `4|` when the brand segment is a named brand such as `MXZONE` or `Ucoolbe`.
 - Confirm every matched stock row used for generation has the new `申报单价V4`, `pc/ctn`, `单箱毛重`, and `单箱净重`; if any are missing, stop and notify operations. A present old `申报单价` / `申报单价F` still counts as missing price if `申报单价V4` is blank.
 - For 拼箱/混箱, confirm package total uses unique physical cartons and is not multiplied by product-row count.
-- For 差异箱, confirm every non-zero `quantity_delta` is accounted for in the working notes/report and was not treated as a matching failure.
+- For 差异箱, confirm every non-zero `quantity_delta` is accounted for in the working notes/report, was not treated as a matching failure, and still equals the original source row actual quantity.
 - If every product matched cleanly, return only the workbook path(s) and concise validation notes. Do not include a full match-audit table by default.
 - If any product is unmatched or ambiguous, stop and ask the user with the candidate/missing-product details before generating the final workbook.
 - If a visual/reference workbook is provided, compare sheet structure, formulas, row deletions, and formatting coverage against it.
