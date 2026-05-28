@@ -24,6 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--country-code", help="Destination country code, for example US. Lowercase is used in filenames.")
     parser.add_argument("--logistics-channel", help="物流商及渠道, used to build the filename prefix.")
     parser.add_argument("--logistics-prefix", help="Explicit filename prefix, overrides --logistics-channel.")
+    parser.add_argument(
+        "--allow-country-prefix",
+        action="store_true",
+        help="Allow a country-only filename when no logistics prefix is present.",
+    )
     parser.add_argument("--include-country", action="store_true", help="Deprecated; logistics filenames now use lowercase country code.")
     parser.add_argument("--packages", type=int, help="Package/carton count used before 件.")
     parser.add_argument("--date", help="Declaration-document date as YYYY-MM-DD, YYYY/M/D, YYYYMMDD, or YYMMDD. Default: today.")
@@ -98,10 +103,9 @@ def logistics_prefix(value: Any) -> str:
     text = safe_filename_part(value)
     if not text:
         return ""
-    if text.startswith("宝通达"):
-        return "宝通达"
-    if text.startswith("海光"):
-        return "海光"
+    for vendor in ("宝通达", "海光", "万逊通", "华洋达", "凯鑫"):
+        if text.startswith(vendor):
+            return vendor
     for suffix in ("纽约卡派", "美中特惠", "普船海卡", "卡派", "海卡", "特惠"):
         if text.endswith(suffix) and len(text) > len(suffix):
             text = text[: -len(suffix)]
@@ -179,6 +183,12 @@ def main() -> None:
     if prefix:
         filename_prefix = prefix + safe_filename_part(country_code or derive_country_code(country)).lower()
     else:
+        if not args.allow_country_prefix:
+            raise ValueError(
+                "Logistics/vendor prefix is required for declaration filenames. "
+                "Provide --logistics-channel, --logistics-prefix, or set logistics_channel/shipment.logistics in data. "
+                "Use --allow-country-prefix only after the user explicitly confirms country-only naming."
+            )
         filename_prefix = country_part
     filename = f"{filename_prefix}{package_count}件报关单资料{output_date}{extension}"
     output_path = args.output_dir / filename

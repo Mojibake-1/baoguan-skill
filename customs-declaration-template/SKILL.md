@@ -98,6 +98,7 @@ If the user says only "帮我做报关单" or similar, assume this skill should 
 - current product list / 本次要做的货物清单
 - declaration-document date / 报关单资料制作日期（默认今天；不要默认使用实际发货日期）
 - destination country or station / 目的国或站点
+- logistics vendor/channel or filename prefix / 物流商及渠道或文件名前缀（例如 `凯鑫英国海运自税递延` -> `凯鑫`）
 - PCS/CTN
 - cartons / 箱数
 - total quantity / 总数量
@@ -110,6 +111,7 @@ Hard input gate:
 - Do not infer the current shipment from `.analysis`, `outputs`, previously generated workbooks, simulated JSON files, screenshots from prior turns, or filenames unless the user explicitly says to use that exact artifact.
 - Do not reuse prior test data such as `simulated-*`, `mock-*`, or an existing `*模拟.xlsx` file for a real or new declaration request.
 - Destination country/station must come from the current user-provided task source or direct user confirmation. Never infer it from the stock-plan workbook, owner names, SKU, old files, or prior runs.
+- Logistics vendor/channel is required for normal operations filenames. If the user provides a truncated pasted table that has product rows, country, PCS/CTN, cartons, and quantities but lacks `物流商及渠道` / filename prefix, stop and ask for the missing logistics/channel or exact prefix before generating. Do not fall back to a country-only filename such as `英国17件报关单资料260528.xlsx` unless the user explicitly confirms a country-only prefix for that run.
 - If a screenshot is partial and only shows carton counts or totals, ask for the missing product rows or the full packing screenshot before generating.
 - If carton-count cells are blank beside product rows, do not backfill a nearby nonblank carton count into every row. Treat the blanks as possible merged-cell/shared-carton evidence and ask for confirmation before generating.
 - If a shared/mixed carton group is present and the source does not include mixed-carton weight allocation inputs, ask for them before generating: warehouse gross weight for the group, each SKU's unit product weight, and whether the quantities are per carton or total for the group. Do not assume mixed-carton gross/net weights from full-carton stock-plan weights.
@@ -286,9 +288,12 @@ Use the current shipment source column `物流商及渠道` for the filename pre
 
 - `宝通达纽约卡派` or other `宝通达...` -> `宝通达`
 - `海光普船海卡` or other `海光...` -> `海光`
+- `万逊通英国海卡自税` or other `万逊通...` -> `万逊通`
+- `华洋达...` -> `华洋达`
+- `凯鑫英国海运自税递延` or other `凯鑫...` -> `凯鑫`
 - otherwise use the leading logistics/vendor name from the cell, removing route/channel suffixes only when obvious.
 
-If multiple logistics channels are combined into one declaration workbook, ask the user which prefix to use unless all channels share the same vendor prefix.
+If the current source does not include `物流商及渠道` or another explicit filename prefix, ask for it before generating the workbook. Do not use the destination country as the filename prefix unless the user explicitly confirms that country-only naming is intended for this run. If multiple logistics channels are combined into one declaration workbook, ask the user which prefix to use unless all channels share the same vendor prefix.
 
 Always append the destination country code in lowercase after the logistics prefix. Known examples:
 
@@ -297,7 +302,7 @@ Always append the destination country code in lowercase after the logistics pref
 
 Known lowercase country codes: 美国 `us`, 英国 `uk`, 加拿大 `ca`. Ask before inventing a new country code.
 
-`件数` means the package/carton total, i.e. the sum of `报关资料录入` column `G`, not the number of product rows. Example: 9 product rows with cartons `10+1+1+4+2+1+6+4+18` is `47件`, so a Canada file with no logistics channel could be `加拿大47件报关单资料260423.xlsx`.
+`件数` means the package/carton total, i.e. the sum of `报关资料录入` column `G`, not the number of product rows. Example: 9 product rows with cartons `10+1+1+4+2+1+6+4+18` is `47件`.
 
 Use declaration-document date for `{YYMMDD}` unless the user says otherwise. Do not use actual shipment date for the filename by default. If the target file exists, create a `-2`, `-3`, etc. variant instead of overwriting.
 
