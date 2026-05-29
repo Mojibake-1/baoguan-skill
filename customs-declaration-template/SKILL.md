@@ -13,9 +13,23 @@ When a source workbook contains multiple declaration tickets/workbooks and subag
 
 Use the newest available model for these workers with `reasoning_effort=xhigh` (currently prefer GPT-5.5 when available). The main agent remains responsible for shared source copying, ticket splitting, supplement files, final cross-ticket reconciliation, edits to renamed final outputs, and final Excel COM validation. Each worker must report changed paths, carton/quantity totals, validation output, and blockers. If product matching, brand, store ownership, carton packing, or red-marked difference boxes are ambiguous, the worker must stop and report the blocker instead of inventing data.
 
+## Tencent Docs MCP Dependency
+
+This skill treats Tencent Docs MCP as an internal data dependency for the default AMZ planning/work-scope sheet, not as an external setup workflow. Use `references/tencent-docs-mcp.md` when MCP authorization is unclear, when any Tencent Docs command fails, or when changing the online source IDs.
+
+Use the local `tencent-docs` MCP configuration already available to the current runtime. Do not copy, print, or commit the underlying token or `Authorization` header. If local authorization is missing, report the MCP authorization blocker directly; do not turn it into broad setup instructions and do not ask for spreadsheet exports until the health check has failed.
+
+Before asking the user to resend the online planning sheet, run the health check yourself:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/check_tencent_docs_mcp.ps1
+```
+
+Use `--server tencent-docs --tool "..."` for all Tencent Docs calls because dotted tool selectors can be parsed incorrectly by some `mcporter` versions.
+
 ## Required Run Order
 
-1. Collect the current shipment list, declaration-document date (the date the customs declaration workbook is being made; default to today's local date if the user does not specify another date), destination country/station, and any packing-specific inputs.
+1. Collect the current shipment list, declaration-document date (the date the customs declaration workbook is being made; default to today's local date if the user does not specify another date), destination country/station, and any packing-specific inputs. If the user points to the default Tencent Docs planning sheet, fetch/read only the user-specified rows or range; if the selection is vague, ask before choosing rows.
 2. Normalize packing before product matching conclusions: blank carton cells, merged carton cells, 拼箱/混箱, and 差异箱 must be resolved first.
 3. For any shared/mixed carton group, collect either final allocated gross/net weights with a source note, or the allocation inputs: group warehouse gross weight, each SKU's unit product weight, and whether quantities are per carton or total.
 4. Match products against `报关名`. If a product cannot be matched or has multiple plausible candidates, stop and ask the user with the candidate rows.
@@ -47,6 +61,8 @@ Use the newest available model for these workers with `reasoning_effort=xhigh` (
 - When asking for mixed-carton weight inputs, explicitly request all required fields: group warehouse gross weight, each SKU's unit product weight, and whether quantities are per carton or total. Do not say "or use the existing rule" unless those exact inputs are already available in the current source.
 
 ## Source Files
+
+- Current shipment/work-scope source: use the user's pasted table, spreadsheet, screenshot, explicit local path, or an explicit row/range selector from the default Tencent Docs work-scope source below. This source supplies the current shipment rows and packing facts; it does not replace `报关名` for product matching.
 
 - Long template: use the user-provided `报关单长模板.xlsx`; the skill may also use `assets/declaration-long-template.xlsx` if present.
 - Stock plan default source: `\\192.168.0.118\沐星科技\亚马逊\表格\常用\amz备货计划V260316.xlsx`, sheet `报关名`. This shared-drive file is the preferred source because operations updates it frequently.
@@ -91,6 +107,29 @@ powershell -ExecutionPolicy Bypass -File scripts/notify_missing_product_lark.ps1
   -MissingFields "申报单价V4, pc/ctn, 单箱毛重"
 ```
 
+## Default Work-Scope Source
+
+When the user says the declaration rows to make are in the planning sheet, use this Tencent Docs source to locate the requested shipment rows:
+
+- URL: `https://docs.qq.com/sheet/DRE1ZTlhoZVZBVkdL?u=2433b3ce0ab54f1e8b74acb4b0e2c643&tab=000001`
+- URL file token: `DRE1ZTlhoZVZBVkdL`
+- `sheet_id` / tab: `000001`
+- expected title: `AMZ备货计划及出货安排表`
+- expected sheet name: `备货详情`
+- observed header row: row 3, with data starting at row 4
+
+Use this source only to identify the user-requested declaration scope and shipment planning fields such as product name, SKU, operator, site/country lane, PCS/CTN, carton count, total quantity, dates, destination warehouse, FBA shipment ID, carrier/channel, declaration method, total cartons, inbound number, notes, packing status, and shipping status. It does not replace the shared-drive `报关名` source for HS code, declaration name, declaration elements, model, unit price V4, pc/ctn, gross weight, or net weight.
+
+For exact MCP commands, authorization checks, and troubleshooting, read `references/tencent-docs-mcp.md`. If a local `.xlsx` copy is useful, use the helper wrapper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/fetch_shipment_work_scope_from_tencent_docs.ps1
+```
+
+The helper writes a sidecar metadata file and skips repeat downloads when Tencent Docs metadata and the local workbook SHA-256 still match. Use `-Force` only when a fresh export is intentionally required.
+
+The user must specify the part to do each time, for example by row number/range, FBA shipment ID, logistics/channel plus exact product rows, product/SKU list, or another unambiguous selection. If the user only says "做报关单", "做这里的", "最新的", "今天的", "这部分", "上面这些", or provides any scope that can map to multiple rows/blocks, ask which rows or range to use. Do not silently process the whole sheet, all visible rows, the latest rows, or the first matching logistics channel.
+
 ## Daily Invocation
 
 If the user says only "帮我做报关单" or similar, assume this skill should run. The user is expected to provide the current shipment list in the message or as a spreadsheet/screenshot. The minimum per-task inputs are:
@@ -107,7 +146,8 @@ If any of these are missing, ask only for the missing data. Do not ask the user 
 
 Hard input gate:
 
-- If the current user message does not include a shipment list, spreadsheet, screenshot, or explicit path to the current shipment source, do not generate a workbook. Ask the user to provide the current shipment list or source file.
+- If the current user message does not include a shipment list, spreadsheet, screenshot, explicit path to the current shipment source, or explicit Tencent Docs row/range selector in the default work-scope source, do not generate a workbook. Ask the user to provide the current shipment list or source file.
+- A Tencent Docs planning-sheet reference is usable only when the selector maps to explicit row(s), a clear row range, one FBA shipment ID, or another unambiguous block. Vague references such as "latest", "today", or "this part" are not enough.
 - Do not infer the current shipment from `.analysis`, `outputs`, previously generated workbooks, simulated JSON files, screenshots from prior turns, or filenames unless the user explicitly says to use that exact artifact.
 - Do not reuse prior test data such as `simulated-*`, `mock-*`, or an existing `*模拟.xlsx` file for a real or new declaration request.
 - Destination country/station must come from the current user-provided task source or direct user confirmation. Never infer it from the stock-plan workbook, owner names, SKU, old files, or prior runs.
@@ -131,7 +171,7 @@ Do not phrase the weight question as only "provide warehouse gross weight or con
 
 ## Start-of-Task Copy
 
-Before matching products, create a fresh local copy of the stock plan:
+If the current shipment source is the default Tencent Docs work-scope sheet, fetch or read the user-selected rows before product matching and save the selected row numbers/range in the working notes. Before matching products, still create a fresh local copy of the stock plan:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/copy_latest_stock_plan.ps1 `
@@ -155,6 +195,7 @@ If this script fails, the agent may still do matching, candidate review, and dat
 On a new machine, confirm these before the first production run:
 
 - The shared-drive stock plan path is reachable and can be copied read-only.
+- The Tencent Docs MCP server is configured and authorized if the default online work-scope source will be used; verify with `scripts/check_tencent_docs_mcp.ps1`.
 - Desktop Microsoft Excel is installed on Windows, because final generation relies on Excel COM.
 - The bundled template `assets/declaration-long-template.xlsx` is still the approved company template, or the user provides the updated template.
 - The stock-plan `报关名` columns still match the expected structure, especially `C 产品内容`, `E 报关规格型号`, `H 申报单价V4`, `I 申报用途/申报要素`, `J pc/ctn`, `K 单箱毛重`, and `L 单箱净重`.
@@ -399,6 +440,7 @@ The script copies the template to the output path, fills `报关资料录入`, d
 
 Before returning the workbook:
 
+- Record source provenance: if Tencent Docs was used, include `file_id`, `sheet_id`, selected row(s)/range, export path or direct-read notes, metadata sidecar path when exported, and the fresh shared-drive `报关名` copy used for matching.
 - Confirm no formula errors such as `#REF!`, `#DIV/0!`, `#VALUE!`, `#NAME?`, or `#N/A`.
 - Confirm formula caches are present by checking downstream totals after Excel recalculation, especially `装箱单!E35/H35/I35`, `发票!J24`, `合同!J28`, `存仓委托书!C10/C11/D12`, and `报关委托书!B20/C20`.
 - Confirm previous merged-cell style risk areas still have styles across all cells: `装箱单!B39:D42`, `发票!B29:D31`, `合同!E30:J31`, `报关委托书!A1:G1`, `报关委托书!A10:G10`, plus merged ranges in `存仓委托书`.
